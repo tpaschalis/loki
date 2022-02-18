@@ -289,7 +289,7 @@ lint:
 ########
 
 test: all
-	GOGC=10 $(GOTEST) -covermode=atomic -coverprofile=coverage.txt $(MOD_FLAG) -p=4 ./... | tee results.txt
+	GOGC=10 $(GOTEST) -covermode=atomic -coverprofile=coverage.txt $(MOD_FLAG) -p=4 ./...
 
 #########
 # Clean #
