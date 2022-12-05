@@ -1,19 +1,23 @@
 package stages
 
+// This package is ported over from grafana/loki/clients/pkg/logentry/stages.
+// We aim to port the stages in steps, to avoid introducing huge amounts of
+// new code without being able to slowly review, examine and test them.
+
 import (
 	"os"
 	"runtime"
 	"time"
 
 	"github.com/go-kit/log"
+	"github.com/grafana/agent/component/common/loki"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
 	"gopkg.in/yaml.v2"
-
-	"github.com/grafana/loki/clients/pkg/promtail/api"
 )
 
+// TODO(@tpaschalis) Let's use this as the list of stages we need to port over.
 const (
 	StageTypeJSON         = "json"
 	StageTypeLogfmt       = "logfmt"
@@ -47,7 +51,7 @@ type Processor interface {
 
 type Entry struct {
 	Extracted map[string]interface{}
-	api.Entry
+	loki.Entry
 }
 
 // Stage can receive entries via an inbound channel and forward mutated entries to an outbound channel.
@@ -104,113 +108,114 @@ func toStage(p Processor) Stage {
 }
 
 // New creates a new stage for the given type and configuration.
-func New(logger log.Logger, jobName *string, stageType string,
-	cfg interface{}, registerer prometheus.Registerer) (Stage, error) {
-	var s Stage
-	var err error
-	switch stageType {
-	case StageTypeDocker:
-		s, err = NewDocker(logger, registerer)
+func New(logger log.Logger, jobName *string, cfg StageConfig, registerer prometheus.Registerer) (Stage, error) {
+	var (
+		s   Stage
+		err error
+	)
+	switch {
+	// case StageTypeDocker:
+	// 	s, err = NewDocker(logger, registerer)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// case StageTypeCRI:
+	// 	s, err = NewCRI(logger, registerer)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	case cfg.JSONConfig != nil:
+		s, err = newJSONStage(logger, cfg.JSONConfig)
 		if err != nil {
 			return nil, err
 		}
-	case StageTypeCRI:
-		s, err = NewCRI(logger, registerer)
+	// case StageTypeLogfmt:
+	// 	s, err = newLogfmtStage(logger, cfg)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// case StageTypeRegex:
+	// 	s, err = newRegexStage(logger, cfg)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// case StageTypeMetric:
+	// 	s, err = newMetricStage(logger, cfg, registerer)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	case cfg.LabelsConfig != nil:
+		s, err = newLabelStage(logger, *cfg.LabelsConfig)
 		if err != nil {
 			return nil, err
 		}
-	case StageTypeJSON:
-		s, err = newJSONStage(logger, cfg)
-		if err != nil {
-			return nil, err
-		}
-	case StageTypeLogfmt:
-		s, err = newLogfmtStage(logger, cfg)
-		if err != nil {
-			return nil, err
-		}
-	case StageTypeRegex:
-		s, err = newRegexStage(logger, cfg)
-		if err != nil {
-			return nil, err
-		}
-	case StageTypeMetric:
-		s, err = newMetricStage(logger, cfg, registerer)
-		if err != nil {
-			return nil, err
-		}
-	case StageTypeLabel:
-		s, err = newLabelStage(logger, cfg)
-		if err != nil {
-			return nil, err
-		}
-	case StageTypeLabelDrop:
-		s, err = newLabelDropStage(cfg)
-		if err != nil {
-			return nil, err
-		}
-	case StageTypeTimestamp:
-		s, err = newTimestampStage(logger, cfg)
-		if err != nil {
-			return nil, err
-		}
-	case StageTypeOutput:
-		s, err = newOutputStage(logger, cfg)
-		if err != nil {
-			return nil, err
-		}
-	case StageTypeMatch:
-		s, err = newMatcherStage(logger, jobName, cfg, registerer)
-		if err != nil {
-			return nil, err
-		}
-	case StageTypeTemplate:
-		s, err = newTemplateStage(logger, cfg)
-		if err != nil {
-			return nil, err
-		}
-	case StageTypeTenant:
-		s, err = newTenantStage(logger, cfg)
-		if err != nil {
-			return nil, err
-		}
-	case StageTypeReplace:
-		s, err = newReplaceStage(logger, cfg)
-		if err != nil {
-			return nil, err
-		}
-	case StageTypeDrop:
-		s, err = newDropStage(logger, cfg, registerer)
-		if err != nil {
-			return nil, err
-		}
-	case StageTypeLimit:
-		s, err = newLimitStage(logger, cfg, registerer)
-		if err != nil {
-			return nil, err
-		}
-	case StageTypeMultiline:
-		s, err = newMultilineStage(logger, cfg)
-		if err != nil {
-			return nil, err
-		}
-	case StageTypePack:
-		s, err = newPackStage(logger, cfg, registerer)
-		if err != nil {
-			return nil, err
-		}
-	case StageTypeLabelAllow:
-		s, err = newLabelAllowStage(cfg)
-		if err != nil {
-			return nil, err
-		}
-	case StageTypeStaticLabels:
-		s, err = newStaticLabelsStage(logger, cfg)
-		if err != nil {
-			return nil, err
-		}
+	// case StageTypeLabelDrop:
+	// 	s, err = newLabelDropStage(cfg)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// case StageTypeTimestamp:
+	// 	s, err = newTimestampStage(logger, cfg)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// case StageTypeOutput:
+	// 	s, err = newOutputStage(logger, cfg)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// case StageTypeMatch:
+	// 	s, err = newMatcherStage(logger, jobName, cfg, registerer)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// case StageTypeTemplate:
+	// 	s, err = newTemplateStage(logger, cfg)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// case StageTypeTenant:
+	// 	s, err = newTenantStage(logger, cfg)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// case StageTypeReplace:
+	// 	s, err = newReplaceStage(logger, cfg)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// case StageTypeDrop:
+	// 	s, err = newDropStage(logger, cfg, registerer)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// case StageTypeLimit:
+	// 	s, err = newLimitStage(logger, cfg, registerer)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// case StageTypeMultiline:
+	// 	s, err = newMultilineStage(logger, cfg)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// case StageTypePack:
+	// 	s, err = newPackStage(logger, cfg, registerer)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// case StageTypeLabelAllow:
+	// 	s, err = newLabelAllowStage(cfg)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// case StageTypeStaticLabels:
+	// 	s, err = newStaticLabelsStage(logger, cfg)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
 	default:
-		return nil, errors.Errorf("Unknown stage type: %s", stageType)
+		return nil, errors.Errorf("Unknown stage type")
 	}
 	return s, nil
 }

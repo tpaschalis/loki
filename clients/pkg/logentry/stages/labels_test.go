@@ -1,5 +1,9 @@
 package stages
 
+// This package is ported over from grafana/loki/clients/pkg/logentry/stages.
+// We aim to port the stages in steps, to avoid introducing huge amounts of
+// new code without being able to slowly review, examine and test them.
+
 import (
 	"bytes"
 	"errors"
@@ -16,16 +20,16 @@ import (
 	util_log "github.com/grafana/loki/pkg/util/log"
 )
 
-var testLabelsYaml = `
-pipeline_stages:
-- json:
-    expressions:
-      level:
-      app_rename: app
-- labels:
-    level:
-    app: app_rename
-`
+var testLabelsYaml = ` stage {
+                         json {
+                           expressions = { level = "", app_rename = "app" }
+                         }
+                       }
+                       stage {
+                         labels { 
+                           values = {"level" = "", "app" = "app_rename" }
+                         }
+                       }`
 
 var testLabelsLogLine = `
 {
@@ -82,6 +86,8 @@ var (
 	lv3c = "l3"
 )
 
+var emptyLabelsConfig = LabelsConfig{nil}
+
 func TestLabels(t *testing.T) {
 	tests := map[string]struct {
 		config       LabelsConfig
@@ -89,29 +95,29 @@ func TestLabels(t *testing.T) {
 		expectedCfgs LabelsConfig
 	}{
 		"missing config": {
-			config:       nil,
+			config:       emptyLabelsConfig,
 			err:          errors.New(ErrEmptyLabelStageConfig),
-			expectedCfgs: nil,
+			expectedCfgs: emptyLabelsConfig,
 		},
 		"invalid label name": {
 			config: LabelsConfig{
-				"#*FDDS*": nil,
+				Values: map[string]*string{"#*FDDS*": nil},
 			},
 			err:          fmt.Errorf(ErrInvalidLabelName, "#*FDDS*"),
-			expectedCfgs: nil,
+			expectedCfgs: emptyLabelsConfig,
 		},
 		"label value is set from name": {
-			config: LabelsConfig{
+			config: LabelsConfig{Values: map[string]*string{
 				"l1": &lv1,
 				"l2": nil,
 				"l3": &lv3,
-			},
+			}},
 			err: nil,
-			expectedCfgs: LabelsConfig{
+			expectedCfgs: LabelsConfig{Values: map[string]*string{
 				"l1": &lv1,
 				"l2": &lv2c,
 				"l3": &lv3c,
-			},
+			}},
 		},
 	}
 	for name, test := range tests {
@@ -127,7 +133,7 @@ func TestLabels(t *testing.T) {
 				t.Errorf("validateLabelsConfig() expected error = %v, actual error = %v", test.err, err)
 				return
 			}
-			if test.expectedCfgs != nil {
+			if test.expectedCfgs.Values != nil {
 				assert.Equal(t, test.expectedCfgs, test.config)
 			}
 		})
@@ -143,9 +149,9 @@ func TestLabelStage_Process(t *testing.T) {
 		expectedLabels model.LabelSet
 	}{
 		"extract_success": {
-			LabelsConfig{
+			LabelsConfig{Values: map[string]*string{
 				"testLabel": nil,
-			},
+			}},
 			map[string]interface{}{
 				"testLabel": "testValue",
 			},
@@ -155,9 +161,9 @@ func TestLabelStage_Process(t *testing.T) {
 			},
 		},
 		"different_source_name": {
-			LabelsConfig{
+			LabelsConfig{Values: map[string]*string{
 				"testLabel": &sourceName,
-			},
+			}},
 			map[string]interface{}{
 				sourceName: "testValue",
 			},
@@ -167,9 +173,9 @@ func TestLabelStage_Process(t *testing.T) {
 			},
 		},
 		"empty_extracted_data": {
-			LabelsConfig{
+			LabelsConfig{Values: map[string]*string{
 				"testLabel": &sourceName,
-			},
+			}},
 			map[string]interface{}{},
 			model.LabelSet{},
 			model.LabelSet{},

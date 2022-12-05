@@ -1,22 +1,52 @@
 package stages
 
+// This package is ported over from grafana/loki/clients/pkg/logentry/stages.
+// We aim to port the stages in steps, to avoid introducing huge amounts of
+// new code without being able to slowly review, examine and test them.
+
 import (
 	"context"
+	"fmt"
+	"reflect"
 	"sync"
 
 	"github.com/go-kit/log"
+	"github.com/grafana/agent/component/common/loki"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/time/rate"
-
-	"github.com/grafana/loki/clients/pkg/promtail/api"
 )
 
-// PipelineStages contains configuration for each stage within a pipeline
-type PipelineStages = []interface{}
+// StageConfig defines a single stage in a processing pipeline.
+// We define these as pointers types so we can use reflection to check that
+// exactly one is set.
+type StageConfig struct {
+	JSONConfig   *JSONConfig   `river:"json,block,optional"`
+	LabelsConfig *LabelsConfig `river:"labels,block,optional"`
+}
 
-// PipelineStage contains configuration for a single pipeline stage
-type PipelineStage = map[interface{}]interface{}
+// UnmarshalRiver implements river.Unmarshaler.
+func (arg *StageConfig) UnmarshalRiver(f func(interface{}) error) error {
+	// *arg = DefaultArguments
+	type args StageConfig
+	if err := f((*args)(arg)); err != nil {
+		return err
+	}
+
+	nonEmpty := 0
+	v := reflect.Indirect(reflect.ValueOf(arg))
+	for i := 0; i < v.NumField(); i++ {
+		if !v.Field(i).IsNil() {
+			nonEmpty++
+		}
+	}
+
+	if nonEmpty != 1 {
+		return fmt.Errorf("each stage block should contain exactly one stage definition, found %d", nonEmpty)
+	}
+
+	return nil
+}
 
 var rateLimiter *rate.Limiter
 var rateLimiterDrop bool
@@ -31,28 +61,14 @@ type Pipeline struct {
 }
 
 // NewPipeline creates a new log entry pipeline from a configuration
-func NewPipeline(logger log.Logger, stgs PipelineStages, jobName *string, registerer prometheus.Registerer) (*Pipeline, error) {
+func NewPipeline(logger log.Logger, stages []StageConfig, jobName *string, registerer prometheus.Registerer) (*Pipeline, error) {
 	st := []Stage{}
-	for _, s := range stgs {
-		stage, ok := s.(PipelineStage)
-		if !ok {
-			return nil, errors.Errorf("invalid YAML config, "+
-				"make sure each stage of your pipeline is a YAML object (must end with a `:`), check stage `- %s`", s)
+	for _, stage := range stages {
+		newStage, err := New(logger, jobName, stage, registerer)
+		if err != nil {
+			return nil, errors.Wrapf(err, "invalid stage config")
 		}
-		if len(stage) > 1 {
-			return nil, errors.New("pipeline stage must contain only one key")
-		}
-		for key, config := range stage {
-			name, ok := key.(string)
-			if !ok {
-				return nil, errors.New("pipeline stage key must be a string")
-			}
-			newStage, err := New(logger, jobName, name, config, registerer)
-			if err != nil {
-				return nil, errors.Wrapf(err, "invalid %s stage config", name)
-			}
-			st = append(st, newStage)
-		}
+		st = append(st, newStage)
 	}
 	return &Pipeline{
 		logger:    log.With(logger, "component", "pipeline"),
@@ -114,8 +130,8 @@ func (p *Pipeline) Name() string {
 }
 
 // Wrap implements EntryMiddleware
-func (p *Pipeline) Wrap(next api.EntryHandler) api.EntryHandler {
-	handlerIn := make(chan api.Entry)
+func (p *Pipeline) Wrap(next loki.EntryHandler) loki.EntryHandler {
+	handlerIn := make(chan loki.Entry)
 	nextChan := next.Chan()
 	wg, once := sync.WaitGroup{}, sync.Once{}
 	pipelineIn := make(chan Entry)
@@ -147,7 +163,7 @@ func (p *Pipeline) Wrap(next api.EntryHandler) api.EntryHandler {
 			}
 		}
 	}()
-	return api.NewEntryHandler(handlerIn, func() {
+	return loki.NewEntryHandler(handlerIn, func() {
 		once.Do(func() { close(handlerIn) })
 		wg.Wait()
 	})
@@ -161,4 +177,24 @@ func (p *Pipeline) Size() int {
 func SetReadLineRateLimiter(rateVal float64, burstVal int, drop bool) {
 	rateLimiter = rate.NewLimiter(rate.Limit(rateVal), burstVal)
 	rateLimiterDrop = drop
+}
+
+// TODO(@tpaschalis) This is a helper from the metrics stage. Remove this
+// copy when we port it over, or remove it entirely in favor of a central
+// metrics struct.
+func getDropCountMetric(registerer prometheus.Registerer) *prometheus.CounterVec {
+	dropCount := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "loki_process_dropped_lines_total",
+		Help: "A count of all log lines dropped as a result of a pipeline stage",
+	}, []string{"reason"})
+	err := registerer.Register(dropCount)
+	if err != nil {
+		if existing, ok := err.(prometheus.AlreadyRegisteredError); ok {
+			dropCount = existing.ExistingCollector.(*prometheus.CounterVec)
+		} else {
+			// Same behavior as MustRegister if the error is not for AlreadyRegistered
+			panic(err)
+		}
+	}
+	return dropCount
 }

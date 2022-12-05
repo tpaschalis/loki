@@ -1,5 +1,9 @@
 package stages
 
+// This package is ported over from grafana/loki/clients/pkg/logentry/stages.
+// We aim to port the stages in steps, to avoid introducing huge amounts of
+// new code without being able to slowly review, examine and test them.
+
 import (
 	"fmt"
 	"reflect"
@@ -8,7 +12,6 @@ import (
 	"github.com/go-kit/log/level"
 	"github.com/jmespath/go-jmespath"
 	json "github.com/json-iterator/go"
-	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 )
 
@@ -23,9 +26,9 @@ const (
 
 // JSONConfig represents a JSON Stage configuration
 type JSONConfig struct {
-	Expressions   map[string]string `mapstructure:"expressions"`
-	Source        *string           `mapstructure:"source"`
-	DropMalformed bool              `mapstructure:"drop_malformed"`
+	Expressions   map[string]string `river:"expressions,attr"`
+	Source        *string           `river:"source,attr,optional"`
+	DropMalformed bool              `river:"drop_malformed,attr,optional"`
 }
 
 // validateJSONConfig validates a json config and returns a map of necessary jmespath expressions.
@@ -67,11 +70,7 @@ type jsonStage struct {
 }
 
 // newJSONStage creates a new json pipeline stage from a config.
-func newJSONStage(logger log.Logger, config interface{}) (Stage, error) {
-	cfg, err := parseJSONConfig(config)
-	if err != nil {
-		return nil, err
-	}
+func newJSONStage(logger log.Logger, cfg *JSONConfig) (Stage, error) {
 	expressions, err := validateJSONConfig(cfg)
 	if err != nil {
 		return nil, err
@@ -81,15 +80,6 @@ func newJSONStage(logger log.Logger, config interface{}) (Stage, error) {
 		expressions: expressions,
 		logger:      log.With(logger, "component", "stage", "type", "json"),
 	}, nil
-}
-
-func parseJSONConfig(config interface{}) (*JSONConfig, error) {
-	cfg := &JSONConfig{}
-	err := mapstructure.Decode(config, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return cfg, nil
 }
 
 func (j *jsonStage) Run(in chan Entry) chan Entry {
